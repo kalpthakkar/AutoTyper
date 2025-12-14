@@ -13,20 +13,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 import asyncio
-
-app = FastAPI()
+from contextlib import asynccontextmanager
 
 broadcast_queue = asyncio.Queue()
-
-# CORS (for fetch requests from UI)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # you can restrict
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 typing_queue = queue.Queue()
 pause_event = threading.Event()
 randomize_flag = True
@@ -42,10 +31,6 @@ connected_status_sockets: list[WebSocket] = []
 class Command(BaseModel):
     action: str
     data: str | int | None = None
-
-import re
-import string
-
 
 def split_text_to_tokens(text: str) -> list[str]:
     """
@@ -332,6 +317,37 @@ async def broadcast_loop():
             except:
                 pass
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    pause_event.clear()
+
+    t = threading.Thread(target=typing_worker, daemon=True)
+    t.start()
+
+    broadcaster = asyncio.create_task(broadcast_loop())
+
+    yield  # App runs here
+
+    # Shutdown
+    typing_queue.put("STOP")
+    broadcaster.cancel()
+
+app = FastAPI(lifespan=lifespan)
+
+# CORS (for fetch requests from UI)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # you can restrict
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+'''
+-------------------------------------------------------------------------------------
+Deprecated Code • Fix Already Applied in `lifespan`
+-------------------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
     pause_event.clear()
@@ -346,6 +362,15 @@ async def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     typing_queue.put("STOP")
+'''
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "AutoType Receiver",
+        "ws": "/ws/status"
+    }
 
 @app.websocket("/ws/status")
 async def status_ws_endpoint(ws: WebSocket):
