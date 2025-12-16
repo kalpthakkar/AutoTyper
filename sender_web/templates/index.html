@@ -1,38 +1,244 @@
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AutoTyper Sender</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AutoTyper Sender</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet" />
+
+    <style>
+        textarea[readonly] {
+            caret-color: transparent;
+        }
+
+        /* === Indicator dot base === */
+        .typing-dot {
+            position: relative;
+            width: 8px;
+            height: 18px;
+            display: flex;
+            align-items: center; /* vertically center pseudo-element */
+            justify-content: center; /* horizontally center if needed */
+        }
+
+        /* === Bounce (typing) === */
+        .typing-dot.bounce::before {
+            content: "";
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: linear-gradient(
+                90deg,
+                #6366f1,
+                #a855f7,
+                #ec4899
+            );
+            animation: typing-bounce 500ms alternate infinite ease;
+        }
+
+        /* === Pulse (paused) === */
+        .typing-dot.pulse::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: linear-gradient(
+                90deg,
+                #facc15,
+                #f59e0b
+            );
+            animation: typing-pulse 1s ease-in-out infinite;
+            position: relative; /* no absolute, let flex center it */
+        }
+
+        /* === Animations === */
+        @keyframes typing-bounce {
+            0% {
+                top: 10px;
+                height: 4px;
+                transform: scaleX(1.8);
+                border-radius: 10px;
+            }
+            40% {
+                height: 8px;
+                transform: scaleX(1);
+                border-radius: 50%;
+            }
+            100% {
+                top: 0;
+            }
+        }
+
+        @keyframes typing-pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            .typing-dot::before {
+                animation: none !important;
+            }
+        }
+
+        .progress-bar {
+            transition: width 0.35s cubic-bezier(0.4, 0.0, 0.2, 1);
+            will-change: width;
+        }
+        /*
+        #progressBar {
+            min-width: 0%;
+            transform: translateZ(0);
+        } */
+
+        /* Generic tooltip container */
+        .tooltip {
+            position: relative;
+            cursor: help;
+            display: inline-block;
+            font-weight: 600;
+        }
+
+        /* Tooltip text */
+        .tooltip .tooltip-text {
+            visibility: hidden;
+            width: max-content;
+            max-width: 220px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: normal;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%; /* Position above the element */
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.2s ease-in-out;
+            pointer-events: none;
+        }
+
+        /* Tooltip arrow */
+        .tooltip .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%; /* Arrow below the tooltip */
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 5px;
+            border-style: solid;
+            border-color: #333 transparent transparent transparent;
+        }
+
+        /* Show tooltip on hover */
+        .tooltip:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        /* Optional: Different colors for active/paused states */
+        .tooltip.active .tooltip-text {
+            background-color: #16a34a; /* green */
+        }
+
+        .tooltip.paused .tooltip-text {
+            background-color: #ca8a04; /* amber */
+        }
+
+        .active-indicator {
+            color: #2563eb; /* blue */
+            font-weight: 600;
+            margin-left: 4px;
+            cursor: default;
+        }
+
+        /* Yellow tint while paused */
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: 0.25rem;
+            transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            /* Remove any bg-* classes from Tailwind when using paused */
+        }
+        .paused-bar {
+            background: linear-gradient(
+                90deg,
+                #facc15,
+                #fbbf24,
+                #f59e0b
+            ) !important; /* force override */
+        }
+
+        /* Paused label styling */
+        .paused-indicator {
+            color: #ca8a04;
+            font-weight: 600;
+            margin-left: 4px;
+            cursor: help;
+        }
+
+    </style>
+
 </head>
 <body class="bg-gray-50 text-gray-900 font-sans min-h-screen flex flex-col">
     <main class="w-full max-w-[85%] mx-auto px-20 pt-10 pb-10 bg-white shadow-lg rounded-lg mt-12 mb-16 flex-grow">
     <h1 class="text-3xl font-extrabold text-center mb-8 tracking-tight" style="font-family: 'Fira Code', monospace; font-weight: 700;">AutoTyper Sender</h1>
 
-    <section class="mb-4">
-    <div class="relative flex w-full rounded-md border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-shadow duration-200">
-        <!-- Line Numbers -->
-        <div id="lineNumbers"
-            class="overflow-hidden text-right pr-3 pt-3 pb-3 text-gray-400 bg-gray-100  rounded-l-md select-none font-mono text-sm leading-6 whitespace-pre"
-            style="min-width: 2.5rem;">
-        1
+    <!-- Textarea section • User Input -->
+    <section class="mb-2">
+        <div class="relative flex w-full rounded-md border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-shadow duration-200">
+            <!-- Line Numbers -->
+            <div id="lineNumbers"
+                class="overflow-hidden text-right pr-3 pt-3 pb-3 text-gray-400 bg-gray-100  rounded-l-md select-none font-mono text-sm leading-6 whitespace-pre"
+                style="min-width: 2.5rem;">
+            1
+            </div>
+            <!-- Textarea -->
+            <textarea
+            id="codeInput"
+            wrap="off"
+            rows="10"
+            placeholder="Enter code or message here..."
+            class="w-full rounded-md p-3 resize-y placeholder-gray-400 bg-white focus:outline-none font-mono text-sm leading-6 overflow-x-auto"
+            oninput="updateLineNumbers()"
+            onscroll="syncScroll()"
+            ></textarea>
+            <!-- Typing Indicator -->
+            <div id="typingIndicator"
+            class="absolute bottom-2 right-6 flex items-center gap-2 text-xs font-medium pointer-events-none opacity-0 transition-opacity duration-300">
+                <div id="typingDot" class="typing-dot"></div>
+                <span id="typingText">Typing…</span>
+            </div>
         </div>
-        <!-- Textarea -->
-        <textarea
-        id="codeInput"
-        wrap="off"
-        rows="10"
-        placeholder="Enter code or message here..."
-        class="w-full rounded-md p-3 resize-y placeholder-gray-400 bg-white focus:outline-none font-mono text-sm leading-6 overflow-x-auto"
-        oninput="updateLineNumbers()"
-        onscroll="syncScroll()"
-        ></textarea>
-    </div>
     </section>
 
+    <!-- Typing Progress -->
+    <section class="mt-2 mb-3 max-w-4xl mx-auto">
+        <div class="flex items-center justify-between mb-1">
+            <span class="text-sm font-medium text-gray-700">Typing Progress</span>
+            <span id="progressText" class="text-sm text-gray-600">0%</span>
+        </div>
 
+        <div class="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+            <div
+            id="progressBar"
+            class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full progress-bar"
+            style="width: 0%"
+            ></div>
+        </div>
+
+        <div class="mt-1 text-xs text-gray-500 text-right">
+            <span id="lineProgress">0 / 0 lines</span>
+        </div>
+    </section>
+
+    <!-- Buttons Controller -->
     <section class="mb-8 flex flex-wrap justify-center gap-4">
       <button
         id="runBtn"
@@ -322,7 +528,6 @@
         // Derive WebSocket URL (assumes same host, port 8000)
         const wsUrl = receiverUrl.replace(/^http/, "ws") + "/ws/status";
         let ws;
-
         function initWebSocket() {
             ws = new WebSocket(wsUrl);
 
@@ -336,8 +541,9 @@
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === "status") {
-                const st = msg.data;
-                applyStatusToUI(st);
+                    applyStatusToUI(msg.data);
+                } else if (msg.type === "typing_completed") {
+                    onTypingCompleted(msg.data);
                 }
             } catch (e) {
                 console.error("Invalid WS message", e, event.data);
@@ -353,6 +559,254 @@
             console.error("WebSocket error", err);
             ws.close();
             };
+        }
+
+        const TypingState = {
+            IDLE: "idle",
+            PREPARING: "preparing",
+            TYPING: "typing",
+            PAUSED: "paused",
+            COMPLETED: "completed"
+        };
+        let typingState = TypingState.IDLE;
+        let isTypingRequestActive = false;
+
+        function updateTextareaLock() {
+            const textarea = document.getElementById("codeInput");
+
+            const shouldLock =
+                typingState === TypingState.TYPING ||
+                typingState === TypingState.PREPARING ||
+                typingState === TypingState.PAUSED;
+
+            textarea.readOnly = shouldLock;
+
+            // Optional visual cue
+            textarea.classList.toggle("cursor-not-allowed", shouldLock);
+            textarea.classList.toggle("bg-gray-50", shouldLock);
+        }
+
+        function updateTypingIndicator(status) {
+            const indicator = document.getElementById("typingIndicator");
+            const dot = document.getElementById("typingDot");
+            const text = document.getElementById("typingText");
+
+            const current = status?.current_line ?? 0;
+            const total = status?.total_lines ?? 0;
+
+            dot.className = "typing-dot";
+
+            switch (typingState) {
+
+                case TypingState.PREPARING:
+                    indicator.style.opacity = "1";
+                    dot.classList.add("bounce");
+                    text.textContent = "Preparing…";
+                    break;
+
+                case TypingState.TYPING:
+                    indicator.style.opacity = "1";
+                    dot.classList.add("bounce");
+                    text.textContent =
+                        `Typing line ${current} / ${total}`;
+                    break;
+
+                case TypingState.PAUSED:
+                    indicator.style.opacity = "1";
+                    dot.classList.add("pulse");
+                    text.textContent =
+                        `Paused at line ${current}`;
+                    break;
+
+                case TypingState.COMPLETED:
+                    indicator.style.opacity = "0"; // smooth fade-out
+                    break;
+
+                case TypingState.IDLE:
+                default:
+                    indicator.style.opacity = "0";
+                    break;
+            }
+        }
+
+        let lastProgress = 0;
+        let forceReset = false;
+        function updateProgress(current_line, total_lines) {
+            const current = current_line ?? 0;
+            const total = total_lines ?? 0;
+
+            /* 🔒 HARD LOCK — never allow overwrite after completion */
+            if (typingState !== TypingState.COMPLETED && status.current_line === 1) {
+                lastProgress = 0;
+            }
+
+            // 🔴 Ignore late WS updates after STOP
+            if (forceReset) return;
+
+            const bar = document.getElementById("progressBar");
+            const text = document.getElementById("progressText");
+            const lines = document.getElementById("lineProgress");
+
+            /* ===============================
+            COMPLETED — hard snap to 100%
+            =============================== */
+            if (typingState === TypingState.COMPLETED) {
+
+                lastProgress = 100;
+
+                // Force repaint-safe update
+                bar.style.transition = "none";
+                bar.offsetWidth; // 🔥 force reflow
+                bar.style.transition = "width 0.2s ease-out";
+
+                bar.classList.remove("paused-bar");
+                bar.style.width = "100%";
+
+                text.textContent = "100%";
+                lines.textContent = `${total} / ${total} lines`;
+                return;
+            }
+
+            /* ===============================
+            PAUSED — freeze progress
+            =============================== */
+            if (typingState === TypingState.PAUSED) {
+                const completed = Math.max(0, current - 1);
+                const percent = total > 0 ? (completed / total) * 100 : 0;
+
+                bar.style.transition = "none";
+                bar.classList.add("paused-bar");
+
+                lastProgress = percent;
+                bar.style.width = `${percent}%`;
+                text.textContent = `${Math.round(percent)}%`;
+
+                lines.innerHTML = `
+                    ${current}
+                    <span class="tooltip paused-indicator">
+                        (paused)
+                        <span class="tooltip-text">Typing paused on this line</span>
+                    </span>
+                    / ${total} lines
+                `;
+                return;
+            }
+
+            /* ===============================
+            IDLE — nothing running
+            =============================== */
+            if (typingState === TypingState.IDLE) {
+                bar.style.transition = "width 0.15s ease-out";
+                bar.classList.remove("paused-bar");
+
+                bar.style.width = "0%";
+                text.textContent = "0%";
+                lines.textContent = "0 / 0 lines";
+                lastProgress = 0;
+                return;
+            }
+
+            /* ===============================
+            TYPING — smooth forward motion
+            =============================== */
+            if (typingState === TypingState.TYPING) {
+                const completed = Math.max(0, current - 1);
+
+                // Calculate percentage
+                let percent = total > 0 ? (completed / total) * 100 : 0;
+                if (current === 1) {
+                    percent = Math.max(percent, 100 / total) / (total < 50 ? 4 : total < 100 ? 3 : 2);
+                }
+                percent = Math.min(percent, 100); // Clamp to 100%
+
+                // 🔒 Never allow progress to jump ahead
+                lastProgress = Math.min(lastProgress, percent);
+
+                // Smooth forward motion
+                lastProgress += (percent - lastProgress) * 0.4;
+
+                bar.style.transition = "width 0.35s cubic-bezier(0.4, 0, 0.2, 1)";
+                bar.classList.remove("paused-bar");
+
+                bar.style.width = `${lastProgress}%`;
+                text.textContent = `${Math.round(percent)}%`;
+
+                lines.innerHTML = `
+                    ${current}
+                    <span class="active-indicator">
+                        (active)
+                    </span>
+                    / ${total} lines
+                `;
+            }
+
+        }
+
+        function resetProgressFast() {
+            const bar = document.getElementById("progressBar");
+            const text = document.getElementById("progressText");
+            const lines = document.getElementById("lineProgress");
+
+            // Fast snap-back animation
+            bar.style.transition = "width 0.15s ease-out";
+            bar.style.width = "0%";
+
+            text.textContent = "0%";
+            lines.textContent = "0 / 0 lines";
+
+            lastProgress = 0;
+
+            // Restore normal smooth transition after reset
+            setTimeout(() => {
+                bar.style.transition = "width 0.35s cubic-bezier(0.4, 0.0, 0.2, 1)";
+            }, 180);
+        }
+
+        function resetProgressImmediate() {
+            const bar = document.getElementById("progressBar");
+            const text = document.getElementById("progressText");
+            const lines = document.getElementById("lineProgress");
+
+            // No animation for new run reset
+            bar.style.transition = "none";
+            bar.style.width = "0%";
+
+            text.textContent = "0%";
+            lines.textContent = "0 / 0 lines";
+
+            lastProgress = 0;
+            forceReset = false;
+
+            // Restore animation for forward motion
+            requestAnimationFrame(() => {
+                bar.style.transition =
+                    "width 0.35s cubic-bezier(0.4, 0.0, 0.2, 1)";
+            });
+        }
+
+        function updateButtonStates(queue_size) {
+            const pauseBtn = document.getElementById("pauseBtn");
+            const runBtn = document.getElementById("runBtn");
+            const stopBtn = document.getElementById("stopBtn");
+
+            // === Pause Button ===
+            const canPause = queue_size > 1;
+            pauseBtn.disabled = !canPause;
+            pauseBtn.textContent = (typingState == "paused" && queue_size > 0) ? "Resume" : "Pause";
+            pauseBtn.classList.toggle("opacity-50", !canPause);
+            pauseBtn.classList.toggle("cursor-not-allowed", !canPause);
+
+            // === Run Button ===
+            const runDisabledStates = ["typing", "preparing", "paused"];
+            runBtn.disabled = runDisabledStates.includes(typingState);
+            runBtn.classList.toggle("opacity-50", runBtn.disabled);
+            runBtn.classList.toggle("cursor-not-allowed", runBtn.disabled);
+
+            // === Stop Button ===
+            const stopDisabledStates = ["idle", "completed"];
+            stopBtn.disabled = stopDisabledStates.includes(typingState);
+            stopBtn.classList.toggle("opacity-50", stopBtn.disabled);
+            stopBtn.classList.toggle("cursor-not-allowed", stopBtn.disabled);
         }
 
         async function updateSpeedRange() {
@@ -378,8 +832,27 @@
         // UI event handlers (same as before)
         document.getElementById("runBtn").onclick = async () => {
             const code = document.getElementById("codeInput").value;
-            if (!code.trim()) return alert("Code is empty.");
-            await sendCommand("type", code);
+            if (!code.trim()) return alert("Text is empty."); // Return
+
+            // Prevent multiple concurrent requests
+            if (isTypingRequestActive) return;
+
+            if (typingState == TypingState.IDLE || typingState == TypingState.COMPLETED) {
+                typingState = TypingState.PREPARING
+                updateTextareaLock();
+                updateButtonStates(0);
+            }
+
+            resetProgressImmediate();
+
+            try {
+                isTypingRequestActive = true; // lock
+                await sendCommand("type", code);
+            } catch (err) {
+                console.error("Failed to send type command:", err);
+            } finally {
+                isTypingRequestActive = false; // unlock after response
+            }
         };
 
         document.getElementById("pauseBtn").onclick = async () => {
@@ -398,6 +871,10 @@
         };
 
         document.getElementById("stopBtn").onclick = async () => {
+            typingState = TypingState.IDLE;
+            updateTextareaLock();
+            forceReset = true;
+            resetProgressFast();
             await sendCommand("stop");
         };
 
@@ -417,29 +894,48 @@
 
         function applyStatusToUI(status) {
 
-            document.getElementById("minSpeed").value = status.speed_min.toFixed(1);
-            document.getElementById("maxSpeed").value = status.speed_max.toFixed(1);
+            if (status.typing_state == 'idle') {
+                typingState = TypingState.IDLE;
+            } else if (status.typing_state == 'preparing') {
+                typingState = TypingState.PREPARING
+            } else if (status.typing_state == 'typing') {
+                typingState = TypingState.TYPING
+            } else if (status.typing_state == 'paused') {
+                typingState = TypingState.PAUSED
+            } else if (status.typing_state == 'completed') {
+                typingState = TypingState.COMPLETED
+            }
 
-            const pauseBtn = document.getElementById("pauseBtn");
+            updateTextareaLock();   // 🔒 IF Running: Lock text area
+            updateTypingIndicator(status);
+
+            // Progress Bar Update
+            updateProgress(status.current_line, status.total_lines);
+
+            updateButtonStates(status.queue_size);
+
             const randomBtn = document.getElementById("randomBtn");
-            const queueSize = status.queue_size || 0;
-
             // Label logic
-            pauseBtn.textContent = (status.paused && status.queue_size > 0) ? "Resume" : "Pause";
             randomBtn.textContent = `Humanize: ${status.randomize ? "On" : "Off"}`;
             document.getElementById("codeModeToggle").checked = status.enable_tab_sync;
             document.getElementById("autoPauseToggle").checked = status.auto_pause_after_line;
             document.getElementById("normalizeToggle").checked = status.normalize;
 
-            // Disable pause button if there's nothing to pause or resume
-            pauseBtn.disabled = (status.queue_size === 0);
+            // Set Speed
+            document.getElementById("minSpeed").value = status.speed_min.toFixed(1);
+            document.getElementById("maxSpeed").value = status.speed_max.toFixed(1);
 
-            // Add disabled style manually (for visual effect)
-            if (pauseBtn.disabled) {
-                pauseBtn.classList.add("opacity-50", "cursor-not-allowed");
-            } else {
-                pauseBtn.classList.remove("opacity-50", "cursor-not-allowed");
-            }
+        }
+
+        function onTypingCompleted(data) {
+            typingState = TypingState.COMPLETED
+
+            // Force-refresh UI state
+            updateProgress(data.total_lines, data.total_lines)
+            
+
+            // UX action
+            // Example update 'PauseBtn' if
         }
 
         function toggleCodeMode() {
