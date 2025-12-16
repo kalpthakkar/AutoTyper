@@ -5,8 +5,11 @@ import queue
 import time
 import string
 import re
+import math
+from collections import Counter
 import random
 import pyautogui
+import pyperclip
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,13 +17,24 @@ from pydantic import BaseModel
 import uvicorn
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Literal, List, Dict
 
 broadcast_queue = asyncio.Queue()
 typing_queue = queue.Queue()
 pause_event = threading.Event()
-randomize_flag = True
-auto_pause_after_line = False
-normalize_lines = False
+typing_state: Literal["idle", "preparing", "typing", "paused", "completed"] = "idle"
+current_line: int = 0
+total_lines: int = 0
+original_map: Dict[int, List[str]] = {} # Hold original token maps
+normalized_map: Dict[int, List[str]] = {} # Hold normalized token maps
+randomize_flag: bool = True
+enable_tab_sync: bool = False
+code_mode_interrupted: bool = False # Intrupt during ongoing line execution
+normalization_interrupted: bool = False # Intrupt during ongoing line execution
+tab = None
+tab_map: Dict[int, int] = {} # line_number, tab_count
+auto_pause_after_line: bool = False
+normalize_lines: bool = False
 
 typing_delay_min = 0.5
 typing_delay_max = 1.5
@@ -31,6 +45,49 @@ connected_status_sockets: list[WebSocket] = []
 class Command(BaseModel):
     action: str
     data: str | int | None = None
+
+def detect_indent_unit(code_str: str) -> str:
+    """
+    Detects the indentation unit used in a code string.
+    Returns:
+        '\t'           if tabs are used
+        ' ' * n        if spaces are used (n = detected indent size)
+        ''             if no indentation is found
+    """
+    lines = code_str.splitlines()
+
+    leading_whitespace = []
+    for line in lines:
+        if line.strip():  # ignore empty / whitespace-only lines
+            ws = line[:len(line) - len(line.lstrip())]
+            if ws:
+                leading_whitespace.append(ws)
+
+    if not leading_whitespace:
+        return ""
+
+    # If any line uses tabs, assume tabs are the indentation unit
+    if any('\t' in ws for ws in leading_whitespace):
+        return '\t'
+
+    # Otherwise, count spaces
+    space_counts = [
+        len(ws) for ws in leading_whitespace if ws.strip() == ""
+    ]
+
+    if not space_counts:
+        return ""
+
+    # Use GCD of indentation levels to infer unit
+    indent_size = space_counts[0]
+    for count in space_counts[1:]:
+        indent_size = math.gcd(indent_size, count)
+
+    # Fallback: most common indentation size
+    if indent_size == 0:
+        indent_size = Counter(space_counts).most_common(1)[0][0]
+
+    return " " * indent_size
 
 def split_text_to_tokens(text: str) -> list[str]:
     """
@@ -43,6 +100,32 @@ def split_text_to_tokens(text: str) -> list[str]:
     """
     token_pattern = r'(\r\n|\n|\t| +|[^a-zA-Z0-9\s]|[a-zA-Z0-9]+)'
     tokens = re.findall(token_pattern, text)
+    return tokens
+
+def build_tokens_from_current_line():
+    
+    source_map = normalized_map if (normalize_lines or enable_tab_sync) else original_map
+
+    all_tokens = []
+    for line_no in range(current_line, total_lines + 1):
+        all_tokens.extend(source_map.get(line_no, []))
+
+    return all_tokens
+
+def set_typing_queue_from_current_line():
+    with typing_queue.mutex:
+        typing_queue.queue.clear()
+
+    global code_mode_interrupted, normalization_interrupted
+    code_mode_interrupted = False
+    normalization_interrupted = False
+
+    tokens = build_tokens_from_current_line()
+
+    for token in tokens:
+        typing_queue.put(token)
+
+    _broadcast_status()
     return tokens
 
 def random_typo_char(correct_char: str) -> str:
@@ -142,6 +225,10 @@ def human_delay(char):
 
     time.sleep(base_delay)
 
+def on_new_line(line_no):
+    if line_no % 10 == 0:
+        time.sleep(random.uniform(0.05, 0.15))  # thinking pause
+
 def type_word(word: str, allow_typo=True):
     """
     Types a word character by character, simulating up to 2 realistic typos and corrections
@@ -209,15 +296,137 @@ def type_word(word: str, allow_typo=True):
             human_delay(word[i])
             i += 1
 
-def typing_worker():
+def init_strip_newline():
+
+    # Copy inline text
+    def copy_left() -> str:
+        pyautogui.hotkey('ctrl', 'shift', 'left')
+        time.sleep(random.uniform(0.05, 0.15))
+        pyautogui.hotkey('ctrl', 'c')
+        time.sleep(random.uniform(0.05, 0.15))
+        return pyperclip.paste()
+    
+    copied_padding_text = copy_left()
+
+    if copied_padding_text == '': # Nothing before (Caret on 1st line without text)
+        return # Good to start
+    elif (copied_padding_text == '\n') or (copied_padding_text.endswith('\n')): # Went above line
+        pyautogui.press('right') 
+        return # Good to start
+    elif copied_padding_text.strip() == '': # Contains tabs and spaces (indent)
+        pyautogui.press('backspace') # Strip indent
+        return # Good to start
+    else: # Something exists before
+        pyautogui.press('right') 
+        time.sleep(random.uniform(0.05, 0.15))
+        pyautogui.press('enter') # Go to new line
+        time.sleep(random.uniform(0.05, 0.15))
+        init_strip_newline() # Re-fix over clean line
+
+def create_line_below():
+    pyautogui.press('enter')
+    time.sleep(random.uniform(0.05, 0.15))
+    pyautogui.press('up')
+    time.sleep(random.uniform(0.05, 0.15))
+
+def sync_tab():
+    global tab
+
+    if not tab_map: # Prevents failure if tab_map was not set during 'START'. Cannot enable 'Code Mode' in ongoing session.
+        return
+
+    # Identify tab alignment and update tab count in `tab_memory`
+    pyautogui.hotkey('ctrl', 'shift', 'left')
+    time.sleep(random.uniform(0.05, 0.15))
+    pyautogui.hotkey('ctrl', 'c')
+    time.sleep(random.uniform(0.05, 0.15))
+    pyautogui.press('right')
+    copied_padding_text = pyperclip.paste()
+
+    # Detect indentation while processing
+    if tab is None: # Tab initialization
+        if copied_padding_text and all(c in [' ', '\t'] for c in copied_padding_text):
+            tab = copied_padding_text
+
+    if tab:
+        desired_tab_count = tab_map.get(current_line, 0)
+        
+        if copied_padding_text.replace(tab, "") == "": # All tabs exactly aligned.
+            tab_count = copied_padding_text.count(tab)
+        else: # Warning! Some misalignment (trying best possible fix by matching initial valid tab count)
+            tab_count = (len(copied_padding_text) - len(copied_padding_text.lstrip(tab))) // len(tab)
+        
+        if desired_tab_count-tab_count > 0: # Add tabs
+            for _ in range(abs(desired_tab_count-tab_count)):
+                pyautogui.press('tab')
+                time.sleep(random.uniform(0.05, 0.15))
+        elif desired_tab_count-tab_count < 0: # Remove tabs
+            for _ in range(abs(desired_tab_count-tab_count)):
+                pyautogui.press('backspace')
+                time.sleep(random.uniform(0.05, 0.15))
+
+def remove_trailing_chars():
+
+    def shift_right():
+        pyautogui.hotkey('ctrl', 'shift', 'right')
+        time.sleep(random.uniform(0.05, 0.15))
+
+    def copy_right() -> str:
+        shift_right()
+        pyautogui.hotkey('ctrl', 'c')
+        time.sleep(random.uniform(0.05, 0.15))
+        return pyperclip.paste()
+    
+    delete_span = 0
+    prev_copy = None
     while True:
-        if pause_event.is_set():
+        text_at_right = copy_right()
+        if prev_copy == text_at_right:
+            pyautogui.press('left')
+            break
+        if text_at_right == '':
+            break
+        elif '\n' in text_at_right:
+            pyautogui.press('left')
+            break
+        prev_copy = text_at_right
+        delete_span += 1
+    
+    if delete_span:
+        for _ in range(delete_span):
+            shift_right()
+        pyautogui.press('backspace')        
+        time.sleep(random.uniform(0.05, 0.15))
+
+def _broadcast_typing_completed():
+    import json
+    msg = json.dumps({
+        "type": "typing_completed",
+        "data": {
+            "total_lines": total_lines
+        }
+    })
+    try:
+        broadcast_queue.put_nowait(msg)
+    except:
+        pass
+
+def typing_worker():
+    global current_line, tab
+
+    while True:
+        if typing_state != 'typing' or pause_event.is_set():
             time.sleep(0.1)
             continue
 
         try:
             item = typing_queue.get(timeout=0.1)
         except queue.Empty:
+            if not pause_event.is_set():
+                # DOUBLE CHECK to avoid race
+                if typing_queue.empty():
+                    _broadcast_typing_completed()
+                    set_typing_state("completed")
             continue
 
         if item == "STOP":
@@ -226,14 +435,56 @@ def typing_worker():
         if isinstance(item, str):
             # Handle special control characters
             if item == "\n":
+
+                if enable_tab_sync:
+                    remove_trailing_chars()
+
                 pyautogui.press("enter")
+                current_line += 1
+                if current_line > total_lines:
+                    current_line = total_lines
+                _broadcast_status()
+                on_new_line(current_line)
+
+                if code_mode_interrupted: # Code mode interupted during ongoing previous line execution. Sync from current line.
+                    if enable_tab_sync:
+                        # Go to new line. Strip indentation to 0 (complete left).
+                        init_strip_newline()
+                        # Create a newline below (required behavior to prevent inline copy in some IDE).
+                        create_line_below()
+                        # If upcoming line contains indentation(s)
+                        if tab_map.get(current_line, 0) > 0: # Record tab identifier, and fix the indentation.
+                            pyautogui.press('tab')
+                            time.sleep(random.uniform(0.05, 0.15))
+                            pyautogui.hotkey('ctrl', 'shift', 'left')
+                            time.sleep(random.uniform(0.05, 0.15))
+                            pyautogui.hotkey('ctrl', 'c')
+                            time.sleep(random.uniform(0.05, 0.15))
+                            pyautogui.press('right')
+                            tab = pyperclip.paste()
+                            time.sleep(random.uniform(0.05, 0.15))
+                            for _ in range(tab_map.get(current_line, 0)-1):
+                                pyautogui.press('tab')
+                                time.sleep(random.uniform(0.05, 0.15))
+                    set_typing_queue_from_current_line()
+                if normalization_interrupted: # Normalization interupted during ongoing previous line execution. Sync from current line.
+                    set_typing_queue_from_current_line()
+
+                if enable_tab_sync and current_line <= total_lines:
+                    sync_tab()
+
                 if auto_pause_after_line:
                     pause_event.set()
+                    set_typing_state("paused")
+
                 _broadcast_status()
                 continue
 
             elif item == "\t":
-                pyautogui.press("tab")
+                if enable_tab_sync:
+                    sync_tab()
+                else:
+                    pyautogui.press("tab")
                 _broadcast_status()
                 continue
 
@@ -262,10 +513,10 @@ def typing_worker():
 
                     if choice == 'long_pause':
                         # print("Pause 10 to 20 seconds")
-                        time.sleep(random.uniform(10.0, 20.0))
+                        time.sleep(random.uniform(8.0, 18.0))
                     elif choice == 'medium_pause':
                         # print("Pause 5 to 10 seconds")
-                        time.sleep(random.uniform(5.0, 10.0))
+                        time.sleep(random.uniform(4.0, 8.0))
                     elif choice == 'short_pause':
                         # print("Pause 0.5 to 2 seconds")
                         time.sleep(random.uniform(0.5, 2.0))
@@ -281,15 +532,26 @@ def typing_worker():
 
             _broadcast_status()
 
+def set_typing_state(state: Literal["idle", "preparing", "typing", "paused", "completed"]):
+    global typing_state
+    if typing_state != state:
+        # print("STATE set to:", state)
+        typing_state = state
+        _broadcast_status()
+
 def _get_status_dict():
     return {
+        "typing_state": typing_state,
         "paused": pause_event.is_set(),
         "randomize": randomize_flag,
+        "enable_tab_sync": enable_tab_sync,
         "auto_pause_after_line": auto_pause_after_line,
         "normalize": normalize_lines,
         "queue_size": typing_queue.qsize(),
         "speed_min": typing_delay_min,
         "speed_max": typing_delay_max,
+        "current_line": current_line,
+        "total_lines": total_lines,
     }
 
 def _broadcast_status():
@@ -343,26 +605,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-'''
--------------------------------------------------------------------------------------
-Deprecated Code • Fix Already Applied in `lifespan`
--------------------------------------------------------------------------------------
-@app.on_event("startup")
-async def startup_event():
-    pause_event.clear()
-
-    # Start typing thread (non-async)
-    t = threading.Thread(target=typing_worker, daemon=True)
-    t.start()
-
-    # Start async broadcaster loop
-    asyncio.create_task(broadcast_loop())
-
-@app.on_event("shutdown")
-def shutdown_event():
-    typing_queue.put("STOP")
-'''
 
 @app.get("/")
 def root():
@@ -420,41 +662,56 @@ async def set_speed_range(data: dict):
 
 @app.post("/command")
 async def receive_command(cmd: Command):
-    global randomize_flag, auto_pause_after_line, normalize_lines
+    global current_line, total_lines, original_map, normalized_map, randomize_flag, auto_pause_after_line, normalize_lines, enable_tab_sync, code_mode_interrupted, normalization_interrupted, tab_map
 
     # For toggles, we will broadcast status after the state change
     if cmd.action == "type":
         if not cmd.data or not isinstance(cmd.data, str):
             raise HTTPException(status_code=400, detail="Data must be a string for 'type'")
+        
+        set_typing_state("preparing")
 
         pause_event.clear()
         text = cmd.data
 
-        if normalize_lines:
-            # Normalize each line by stripping leading spaces/tabs only
-            lines = text.splitlines(keepends=True)
-            normalized = ""
-            for line in lines:
-                match = re.match(r'^([ \t]*)(.*?)(\r?\n)?$', line)
-                if match:
-                    _, content, newline = match.groups()
-                    normalized += content + (newline or "")
-            text = normalized
+        lines = text.splitlines(keepends=True)
 
-        # Now tokenize
-        tokens = split_text_to_tokens(text)
-        for token in tokens:
-            typing_queue.put(token)
+        total_lines = len(lines)
+        current_line = 1
 
-        _broadcast_status()
+        # Build tab_map -> line_number, tab_count
+        tab_map.clear()
+        indent_unit: str = detect_indent_unit(text)
+        for line_number, line_text in enumerate(lines, start=1):
+            line_text = line_text.rstrip()
+            tab_map[line_number] = (len(line_text) - len(line_text.lstrip(indent_unit))) // len(indent_unit) if indent_unit else 0
+
+        original_map = {}
+        normalized_map = {}
+        for i, line in enumerate(lines, start=1):
+            original_map[i] = split_text_to_tokens(line)
+            match = re.match(r'^([ \t]*)(.*?)(\r?\n)?$', line)
+            if match:
+                _, content, newline = match.groups()
+                normalized_line = content + (newline or "")
+                normalized_map[i] = split_text_to_tokens(normalized_line)
+
+        tokens = set_typing_queue_from_current_line()
+
+        if enable_tab_sync:
+            init_strip_newline()
+            create_line_below()
+
+        set_typing_state("typing")
         return {"status": "typing started", "tokens": tokens}
-
 
     elif cmd.action == "pause":
         pause_event.set()
+        set_typing_state("paused")
 
     elif cmd.action == "resume":
         pause_event.clear()
+        set_typing_state("typing")
 
     elif cmd.action == "toggle_random":
         randomize_flag = not randomize_flag
@@ -462,6 +719,12 @@ async def receive_command(cmd: Command):
         _broadcast_status()
         return {"randomize": randomize_flag}
 
+    elif cmd.action == "toggle_code_mode":
+        enable_tab_sync = not enable_tab_sync
+        code_mode_interrupted = True
+        _broadcast_status()
+        return {"enable_tab_sync": enable_tab_sync}
+    
     elif cmd.action == "toggle_auto_pause":
         auto_pause_after_line = not auto_pause_after_line
         _broadcast_status()
@@ -469,14 +732,18 @@ async def receive_command(cmd: Command):
     
     elif cmd.action == "toggle_normalize":
         normalize_lines = not normalize_lines
+        normalization_interrupted = True
         _broadcast_status()
         return {"normalize": normalize_lines}
 
     elif cmd.action == "stop":
         with typing_queue.mutex:
             typing_queue.queue.clear()
+        current_line = 0
+        total_lines = 0
         pause_event.set()
-        _broadcast_status()
+        set_typing_state("idle")
+        # _broadcast_status()
         return {"status": "typing stopped"}
 
     else:
