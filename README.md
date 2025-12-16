@@ -3,7 +3,7 @@
 Human-like, State-aware Auto-typing System built for `live coding`, `tutorial recording`, `technical interviews`, `demos`, `workflow automation`, and `distraction-free automation` - without sounding like a robot.
 
 <p align="center" style="display:flex; gap:10px; flex-wrap: wrap; justify-content:center;">
-  <a href="#"><img src="https://img.shields.io/badge/AI-Auto_Typer-FF66C4?style=for-the-badge&logo=hyper&logoColor=white&labelColor=1D1D2C"></a>
+  <a href="#"><img src="https://img.shields.io/badge/AT-Auto_Typer-FF66C4?style=for-the-badge&logo=hyper&logoColor=white&labelColor=1D1D2C"></a>
   <a href="#"><img src="https://img.shields.io/badge/Maintained-Yes-00FFB7?style=for-the-badge&logo=github&logoColor=white&labelColor=0F172A"></a>
   <a href="#"><img src="https://img.shields.io/badge/Category-Automation-1E90FF?style=for-the-badge&logo=fastapi&logoColor=white&labelColor=0F172A"></a>
   <a href="#"><img src="https://img.shields.io/badge/Purpose-Typing_Automation-FFA500?style=for-the-badge&logo=python&logoColor=white&labelColor=0F172A"></a>
